@@ -8,17 +8,17 @@ import log from 'lighthouse-logger';
 
 import {initializeConfig} from '../config/config.js';
 
-/** @typedef {import('@sentry/node').Breadcrumb} Breadcrumb */
-/** @typedef {import('@sentry/node').NodeClient} NodeClient */
-/** @typedef {import('@sentry/node').NodeOptions} NodeOptions */
-/** @typedef {import('@sentry/node').SeverityLevel} SeverityLevel */
+/** @typedef {import('@sentry/core').ServerRuntimeClient} ServerRuntimeClient */
+/** @typedef {import('@sentry/core').ServerRuntimeClientOptions} ServerRuntimeClientOptions */
+/** @typedef {import('@sentry/core').Scope} Scope */
 
-const SENTRY_URL = 'https://a6bb0da87ee048cc9ae2a345fc09ab2e:63a7029f46f74265981b7e005e0f69f8@sentry.io/174697';
+const SENTRY_URL =
+  'https://a6bb0da87ee048cc9ae2a345fc09ab2e:63a7029f46f74265981b7e005e0f69f8@sentry.io/174697';
 
 // Per-run chance of capturing errors (if enabled).
 const SAMPLE_RATE = 0.01;
 
-const noop = () => { };
+const noop = () => {};
 
 /**
  * A delegate for sentry so that environments without error reporting enabled will use
@@ -26,14 +26,14 @@ const noop = () => { };
  */
 const sentryDelegate = {
   init,
-  /** @type {(message: string, level?: SeverityLevel) => void} */
+  /** @type {(...args: Parameters<Scope["captureMessage"]>) => void} */
   captureMessage: noop,
-  /** @type {(breadcrumb: Breadcrumb) => void} */
+  /** @type {(...args: Parameters<Scope["addBreadcrumb"]>) => void} */
   captureBreadcrumb: noop,
   /** @type {() => any} */
   getContext: noop,
   /** @type {(error: Error, options: {level?: string, tags?: {[key: string]: any}, extra?: {[key: string]: any}}) => Promise<void>} */
-  captureException: async () => { },
+  captureException: async () => {},
   _shouldSample() {
     return SAMPLE_RATE >= Math.random();
   },
@@ -41,7 +41,7 @@ const sentryDelegate = {
 
 /**
  * When called, replaces noops with actual Sentry implementation.
- * @param {{url: string, flags: LH.CliFlags, config?: LH.Config, environmentData: NodeOptions}} opts
+ * @param {{url: string, flags: LH.CliFlags, config?: LH.Config, environmentData: ServerRuntimeClientOptions}} opts
  */
 async function init(opts) {
   // If error reporting is disabled, leave the functions as a noop
@@ -55,11 +55,15 @@ async function init(opts) {
   }
 
   try {
-    const Sentry = await import('@sentry/node');
-    Sentry.init({
+    const Sentry = await import('@sentry/core');
+
+    const client = new Sentry.ServerRuntimeClient({
       ...opts.environmentData,
       dsn: SENTRY_URL,
     });
+
+    const scope = new Sentry.Scope();
+    scope.setClient(client);
 
     /** @type {LH.Config.Settings | LH.CliFlags} */
     let settings = opts.flags;
@@ -85,8 +89,9 @@ async function init(opts) {
     Sentry.setExtras(extras);
 
     // Have each delegate function call the corresponding sentry function by default
-    sentryDelegate.captureMessage = (...args) => Sentry.captureMessage(...args);
-    sentryDelegate.captureBreadcrumb = (...args) => Sentry.addBreadcrumb(...args);
+    sentryDelegate.captureMessage = (...args) => scope.captureMessage(...args);
+    sentryDelegate.captureBreadcrumb = (...args) =>
+      scope.addBreadcrumb(...args);
     sentryDelegate.getContext = () => extras;
 
     // Keep a record of exceptions per audit/gatherer so we can just report once
@@ -124,25 +129,15 @@ async function init(opts) {
         opts.tags.protocolMethod = err.protocolMethod;
       }
 
-      Sentry.withScope(scope => {
-        if (opts.level) {
-          // @ts-expect-error - allow any string.
-          scope.setLevel(opts.level);
-        }
-        if (opts.tags) {
-          scope.setTags(opts.tags);
-        }
-
-        // Add extra details
-        let extra;
-        if (opts.extra) extra = {...opts.extra};
-        // @ts-expect-error Non-standard property
-        if (err.extra) extra = {...extra, ...err.extra};
-        if (extra) {
-          scope.setExtras(extra);
-        }
-
-        Sentry.captureException(err);
+      scope.captureException(err, {
+        // @ts-expect-error - allow any string.
+        level: opts.level,
+        tags: opts.tags,
+        extra: {
+          ...opts.extra,
+          // @ts-expect-error Non-standard property
+          ...err.extra,
+        },
       });
     };
   } catch (e) {

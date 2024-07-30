@@ -182,7 +182,7 @@
   },
   "dependencies": {
     "@paulirish/trace_engine": "0.0.28",
-    "@sentry/node": "^8.20.0",
+    "@sentry/core": "^8.20.0",
     "axe-core": "^4.9.1",
     "chrome-launcher": "^1.1.2",
     "configstore": "^5.0.1",
